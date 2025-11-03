@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>프로젝트: 중앙값 덱</title>
+</head>
+<body>
+    <h1>프로젝트: 중앙값 덱 (실시간 분석 결과)</h1>
+
+    {% for card in results %}
+
+        <p>
+            {{ card.name }} -> {{ card.type }} (평균: {{ card.average }})
+        </p>
+
+    {% endfor %}
+</body>
+</html>
