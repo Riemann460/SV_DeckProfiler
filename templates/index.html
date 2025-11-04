@@ -11,22 +11,109 @@
 <body>
     <h1>프로젝트: SV Deck Profiler (실시간 분석 결과)</h1>
 
-    <table>
-        <tr>
-            <th>카드 이름</th>
-            <th>분석 결과</th>
-            <th>평균 사용량</th>
-        </tr>
-
-        {% for card in results %}
-        <tr>
-            <td>{{ card.name }}</td>
-            <td>{{ card.type }}</td>
-            <td>{{ card.average }}</td>
-        </tr>
+    <label for="deckname_select_elm">덱 선택:</label>
+    <select id="deckname_select_elm">
+        {% for deck_name in deck_names %}
+        <option value="{{ deck_name }}" {% if deck_name == selected_deck %}selected{% endif %}>{{ deck_name }}</option>
         {% endfor %}
+    </select>
 
+    <table id="card_analysis_table">
+        <thead>
+            <tr>
+                <th>카드 이름</th>
+                <th>분석 결과</th>
+                <th>분산</th>
+                <th>표준편차</th>
+                <th>반올림</th>
+                <th>분석결과-반올림</th>
+                <th>채용 장수</th>
+                <th>제거 가능성</th>
+                <th>추가 가능성</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for card in results %}
+            <tr>
+                <td>{{ card.name }}</td>
+                <td>{{ card.average }}</td>
+                <td>{{ card.variance }}</td>
+                <td>{{ card.std_dev }}</td>
+                <td>{{ card.rounded_average }}</td>
+                <td>{{ card.delta }}</td>
+                <td>{{ card.adjusted_count }}</td>
+                <td>
+                    {% if card.removability_score != 'N/A' and card.removability_score != 'INF' %}
+                        {% set score = card.removability_score|float %}
+                        {% if score >= 0.2 %}
+                            O
+                        {% elif score >= 0.1 %}
+                            △
+                        {% else %}
+                            X
+                        {% endif %}
+                    {% else %}
+                        {{ card.removability_score }}
+                    {% endif %}
+                </td>
+                <td>
+                    {% if card.addability_score != 'N/A' and card.addability_score != 'INF' %}
+                        {% set score = card.addability_score|float %}
+                        {% if score >= 0.2 %}
+                            O
+                        {% elif score >= 0.1 %}
+                            △
+                        {% else %}
+                            X
+                        {% endif %}
+                    {% else %}
+                        {{ card.addability_score }}
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
     </table>
+
+    <script>
+        document.getElementById('deckname_select_elm').addEventListener('change', function() {
+            const selectedDeck = this.value;
+            fetch(`/get_deck_analysis/${selectedDeck}`)
+                .then(response => response.json())
+                .then(data => {
+                    const tableBody = document.querySelector('#card_analysis_table tbody');
+                    tableBody.innerHTML = ''; // Clear existing rows
+
+                    function getScoreSymbol(score) {
+                        if (score === 'N/A' || score === 'INF') {
+                            return score;
+                        }
+                        const scoreValue = parseFloat(score);
+                        if (scoreValue >= 0.2) {
+                            return 'O';
+                        } else if (scoreValue >= 0.1) {
+                            return '△';
+                        } else {
+                            return 'X';
+                        }
+                    }
+
+                    data.forEach(card => {
+                        const row = tableBody.insertRow();
+                        row.insertCell().textContent = card.name;
+                        row.insertCell().textContent = card.average;
+                        row.insertCell().textContent = card.variance;
+                        row.insertCell().textContent = card.std_dev;
+                        row.insertCell().textContent = card.rounded_average;
+                        row.insertCell().textContent = card.delta;
+                        row.insertCell().textContent = card.adjusted_count;
+                        row.insertCell().textContent = getScoreSymbol(card.removability_score);
+                        row.insertCell().textContent = getScoreSymbol(card.addability_score);
+                    });
+                })
+                .catch(error => console.error('Error fetching deck analysis:', error));
+        });
+    </script>
 
 </body>
 </html>
