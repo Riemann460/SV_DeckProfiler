@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+
+# Test files
+crawl_test.py
+svlabo.html
+*.js
+
+# Other
+통계기반 덱 구성 전략.txt
