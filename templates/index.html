@@ -3,157 +3,59 @@
 <head>
     <title>프로젝트: SV Deck Profiler</title>
     <style>
-        table { border-collapse: collapse; width: 60%; }
+        body { font-family: sans-serif; }
+        table { border-collapse: collapse; width: 95%; margin-top: 20px; }
         th, td { border: 1px solid black; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
+        th.sortable { background-color: #f2f2f2; cursor: pointer; position: relative; }
+        th.sortable:hover { background-color: #e2e2e2; }
+        th.sortable::after { content: ''; position: absolute; right: 8px; top: 50%; margin-top: -7px; border-width: 5px; border-style: solid; border-color: transparent; opacity: 0.3; }
+        th.sort-asc::after { border-bottom-color: black; opacity: 1; }
+        th.sort-desc::after { border-top-color: black; opacity: 1; }
+        .controls { margin-bottom: 20px; }
+        .adjust-btn { margin: 0 5px; cursor: pointer; width: 25px; }
+        td:nth-child(4) { text-align: center; } /* Center the custom count column */
+        #deck-total { font-weight: bold; margin-left: 20px; }
+        .count-increased { background-color: #e6ffed !important; } /* light green */
+        .count-decreased { background-color: #ffe6e6 !important; } /* light red */
     </style>
 </head>
 <body>
     <h1>프로젝트: SV Deck Profiler (실시간 분석 결과)</h1>
 
-    <label for="post_select_elm">포스트 선택:</label>
-    <select id="post_select_elm">
-        {% for post in posts %}
-        <option value="{{ post.url }}" {% if post.url == selected_post_url %}selected{% endif %}>{{ post.title }}</option>
-        {% endfor %}
-    </select>
+    <div class="controls">
+        <label for="post_select_elm">포스트 선택:</label>
+        <select id="post_select_elm">
+            {% for post in posts %}
+            <option value="{{ post.url }}" {% if post.url == selected_post_url %}selected{% endif %}>{{ post.title }}</option>
+            {% endfor %}
+        </select>
 
-    <label for="deckname_select_elm">덱 선택:</label>
-    <select id="deckname_select_elm">
-        {% for deck_name in deck_names %}
-        <option value="{{ deck_name }}" {% if deck_name == selected_deck %}selected{% endif %}>{{ deck_name }}</option>
-        {% endfor %}
-    </select>
+        <label for="deckname_select_elm">덱 선택:</label>
+        <select id="deckname_select_elm">
+            {% for deck_name in deck_names %}
+            <option value="{{ deck_name }}" {% if deck_name == selected_deck %}selected{% endif %}>{{ deck_name }}</option>
+            {% endfor %}
+        </select>
+        <span id="deck-total"></span>
+    </div>
 
     <table id="card_analysis_table">
         <thead>
             <tr>
-                <th>카드 이름</th>
-                <th>분석 결과</th>
-                <th>분산</th>
-                <th>표준편차</th>
-                <th>반올림</th>
-                <th>분석결과-반올림</th>
-                <th>채용 장수</th>
-                <th>제거 가능성</th>
-                <th>추가 가능성</th>
+                <th class="sortable" data-sort="name">카드 이름</th>
+                <th class="sortable" data-sort="average">평균 채용률</th>
+                <th class="sortable" data-sort="original_adjusted_count">최초 추천</th>
+                <th class="sortable" data-sort="adjusted_count">커스텀 채용 수</th>
+                <th class="sortable" data-sort="removability_score">제거 우선도</th>
+                <th class="sortable" data-sort="addability_score">추가 우선도</th>
             </tr>
         </thead>
         <tbody>
-            {% for card in results %}
-            <tr>
-                <td>{{ card.name }}</td>
-                <td>{{ card.average }}</td>
-                <td>{{ card.variance }}</td>
-                <td>{{ card.std_dev }}</td>
-                <td>{{ card.rounded_average }}</td>
-                <td>{{ card.delta }}</td>
-                <td>{{ card.adjusted_count }}</td>
-                <td>
-                    {% if card.removability_score != 'N/A' and card.removability_score != 'INF' %}
-                        {% set score = card.removability_score|float %}
-                        {% if score >= 0.2 %}
-                            O
-                        {% elif score >= 0.1 %}
-                            △
-                        {% else %}
-                            X
-                        {% endif %}
-                    {% else %}
-                        {{ card.removability_score }}
-                    {% endif %}
-                </td>
-                <td>
-                    {% if card.addability_score != 'N/A' and card.addability_score != 'INF' %}
-                        {% set score = card.addability_score|float %}
-                        {% if score >= 0.2 %}
-                            O
-                        {% elif score >= 0.1 %}
-                            △
-                        {% else %}
-                            X
-                        {% endif %}
-                    {% else %}
-                        {{ card.addability_score }}
-                    {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
+            <!-- JS에 의해 동적으로 채워짐 -->
         </tbody>
     </table>
 
-    <script>
-        const postSelect = document.getElementById('post_select_elm');
-        const deckSelect = document.getElementById('deckname_select_elm');
-        const tableBody = document.querySelector('#card_analysis_table tbody');
-
-        function getScoreSymbol(score) {
-            if (score === 'N/A' || score === 'INF') {
-                return score;
-            }
-            const scoreValue = parseFloat(score);
-            if (scoreValue >= 0.2) {
-                return 'O';
-            } else if (scoreValue >= 0.1) {
-                return '△';
-            } else {
-                return 'X';
-            }
-        }
-
-        function updateTable(data) {
-            tableBody.innerHTML = ''; // Clear existing rows
-            data.forEach(card => {
-                const row = tableBody.insertRow();
-                row.insertCell().textContent = card.name;
-                row.insertCell().textContent = card.average;
-                row.insertCell().textContent = card.variance;
-                row.insertCell().textContent = card.std_dev;
-                row.insertCell().textContent = card.rounded_average;
-                row.insertCell().textContent = card.delta;
-                row.insertCell().textContent = card.adjusted_count;
-                row.insertCell().textContent = getScoreSymbol(card.removability_score);
-                row.insertCell().textContent = getScoreSymbol(card.addability_score);
-            });
-        }
-
-        function fetchAnalysis(postUrl, deckName) {
-            fetch(`/get_deck_analysis?url=${encodeURIComponent(postUrl)}&deck_name=${encodeURIComponent(deckName)}`)
-                .then(response => response.json())
-                .then(data => {
-                    updateTable(data);
-                })
-                .catch(error => console.error('Error fetching deck analysis:', error));
-        }
-
-        postSelect.addEventListener('change', function() {
-            const selectedPostUrl = this.value;
-            fetch(`/get_deck_names_for_post?url=${encodeURIComponent(selectedPostUrl)}`)
-                .then(response => response.json())
-                .then(deckNames => {
-                    // Update deck dropdown
-                    deckSelect.innerHTML = '';
-                    deckNames.forEach(name => {
-                        const option = document.createElement('option');
-                        option.value = name;
-                        option.textContent = name;
-                        deckSelect.appendChild(option);
-                    });
-
-                    // Fetch analysis for the first deck in the new list
-                    if (deckNames.length > 0) {
-                        fetchAnalysis(selectedPostUrl, deckNames[0]);
-                    }
-                })
-                .catch(error => console.error('Error fetching deck names:', error));
-        });
-
-        deckSelect.addEventListener('change', function() {
-            const selectedDeckName = this.value;
-            const selectedPostUrl = postSelect.value;
-            fetchAnalysis(selectedPostUrl, selectedDeckName);
-        });
-    </script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 
 </body>
 </html>

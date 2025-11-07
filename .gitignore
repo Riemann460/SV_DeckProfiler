@@ -9,7 +9,6 @@ __pycache__/
 # Test files
 crawl_test.py
 svlabo.html
-*.js
 
 # Gemini files
 PRD.md
