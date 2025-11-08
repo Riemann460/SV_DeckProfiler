@@ -2,6 +2,7 @@ from functools import total_ordering
 from datetime import datetime
 import time
 import math
+import json
 
 from flask import Flask, render_template, jsonify, request
 from bs4 import BeautifulSoup
@@ -10,6 +11,8 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support.ui import Select
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import numpy as np
 
 # --- 상수 ---
@@ -18,10 +21,75 @@ DECK_SELECT_ID = "deckname_select_elm"
 TABLE_HEADER_ID = "#table_header"
 DECKLIST_BODY_ID = "#decklist_body"
 
+import atexit
+
 # --- 전역 변수 ---
 driver = None  # Selenium WebDriver 전역 인스턴스
+card_database = {} # 카드 이름과 ID를 매핑하는 데이터베이스
+card_id_by_normalized_name = {} # 정규화된 카드 이름을 키로 사용하는 DB
 
 app = Flask(__name__)
+
+# 커스텀 문자-이진수 매핑 정의
+custom_char_to_binary_map = {}
+for i in range(10):
+    custom_char_to_binary_map[str(i)] = i
+for i in range(26):
+    custom_char_to_binary_map[chr(ord('A') + i)] = i + 10
+for i in range(26):
+    custom_char_to_binary_map[chr(ord('a') + i)] = i + 36
+custom_char_to_binary_map['-'] = 62
+custom_char_to_binary_map['_'] = 63
+
+# 역 매핑 (정수 -> 문자)
+reverse_custom_map = [None] * 64
+for char, value in custom_char_to_binary_map.items():
+    reverse_custom_map[value] = char
+
+def int_to_custom_base64(value_24bit):
+    if not (0 <= value_24bit < (1 << 24)): # 24비트 정수인지 확인
+        raise ValueError("입력은 24비트 정수여야 합니다.")
+
+    chars = []
+    for i in range(4): # 4개의 문자, 각 6비트
+        # 가장 상위 비트부터 6비트씩 추출
+        six_bit_value = (value_24bit >> (6 * (3 - i))) & 0x3F # 0x3F는 이진수로 111111
+        chars.append(reverse_custom_map[six_bit_value])
+    return "".join(chars)
+
+def normalize_card_name(name):
+    """카드 이름에서 공백과 같은 불필요한 문자를 제거하여 정규화합니다."""
+    return name.replace(" ", "").replace("　", "")
+
+def load_card_database():
+    """카드 데이터베이스 JSON 파일을 로드하고, 정규화된 이름의 DB를 생성합니다."""
+    global card_database, card_id_by_normalized_name
+    try:
+        with open("card_database.json", "r", encoding="utf-8") as f:
+            card_database = json.load(f)
+        
+        # 정규화된 이름을 키로, ID를 값으로 하는 새 딕셔너리 생성
+        card_id_by_normalized_name = {
+            normalize_card_name(name): card_id 
+            for name, card_id in card_database.items()
+        }
+        print(f"성공: {len(card_database)}개의 카드 정보를 로드하고 정규화했습니다.")
+    except FileNotFoundError:
+        print("경고: card_database.json 파일을 찾을 수 없습니다.")
+    except json.JSONDecodeError:
+        print("경고: card_database.json 파일 파싱에 실패했습니다.")
+
+
+
+
+def shutdown_driver():
+    """애플리케이션 종료 시 Selenium 드라이버를 종료합니다."""
+    global driver
+    if driver:
+        print("Shutting down driver...")
+        driver.quit()
+
+atexit.register(shutdown_driver)
 
 
 class Card:
@@ -58,46 +126,69 @@ def init_driver():
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service)
 
-def get_post_list():
-    """메인 페이지에서 덱 리스트 비교 포스트 목록을 가져옵니다."""
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+def get_post_list(num_pages=2):
+    """메인 페이지에서 여러 페이지에 걸쳐 덱 리스트 비교 포스트 목록을 가져옵니다."""
     init_driver()
     driver.get(SVLABO_URL)
-    time.sleep(5)  # 동적 콘텐츠 로딩 대기
-
-    posts = []
-    all_links = driver.find_elements(By.TAG_NAME, "a")
     
-    for link in all_links:
+    posts = []
+    
+    for page_num in range(num_pages):
+        # 현재 페이지가 완전히 로드될 때까지 기다립니다. (예: 특정 요소 확인)
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "a"))
+        )
+        
+        all_links = driver.find_elements(By.TAG_NAME, "a")
+        for link in all_links:
+            try:
+                title = link.text
+                if "デッキリスト比較" in title:
+                    url = link.get_attribute('href')
+                    if url and url not in [p['url'] for p in posts]:
+                        posts.append({"title": title, "url": url})
+            except Exception:
+                continue
+        
         try:
-            title = link.text
-            if "デッキリスト比較" in title:
-                url = link.get_attribute('href')
-                if url and url not in [p['url'] for p in posts]:
-                    posts.append({"title": title, "url": url})
-        except Exception:
-            # DOM이 변경되는 동안 반복할 경우 StaleElementReferenceException 처리
-            continue
+            # '다음 페이지' 버튼이 클릭 가능해질 때까지 기다립니다.
+            next_page_link = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "a.pager_next_link"))
+            )
+            driver.execute_script("arguments[0].click();", next_page_link)
+        except Exception as e:
+            print(f"다음 페이지를 찾을 수 없어 {page_num + 1}페이지에서 중단합니다: {e}")
+            break
+            
     return posts
 
 def get_deck_names(url):
-    """주어진 포스트 URL에 대해 사용 가능한 덱 이름 목록을 가져옵니다."""
+    """주어진 포스트 URL에 대해 사용 가능한 덱 타입 목록을 가져옵니다."""
     init_driver()
     driver.get(url)
-    time.sleep(5)
-    deck_select_element = driver.find_element(By.ID, DECK_SELECT_ID)
+    deck_select_element = WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.ID, DECK_SELECT_ID))
+    )
     select_obj = Select(deck_select_element)
     options = [option.text for option in select_obj.options]
     return options
 
 def scrape_card_data(url, deck_name):
-    """포스트 페이지에서 특정 덱을 선택하고, 파싱된 HTML(BeautifulSoup 객체)을 반환합니다."""
+    """포스트 페이지에서 특정 덱 타입을 선택하고, 파싱된 HTML(BeautifulSoup 객체)을 반환합니다."""
     init_driver()
     driver.get(url)
-    time.sleep(5)
-    deck_select_element = driver.find_element(By.ID, DECK_SELECT_ID)
+    deck_select_element = WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.ID, DECK_SELECT_ID))
+    )
     select_obj = Select(deck_select_element)
     select_obj.select_by_visible_text(deck_name)
-    time.sleep(3)
+    # 덱 선택 후 테이블 헤더가 로드될 때까지 기다립니다.
+    WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, TABLE_HEADER_ID))
+    )
     html = driver.page_source
     return BeautifulSoup(html, 'html.parser')
 
@@ -113,7 +204,7 @@ def calculate_initial_analysis(soup):
     header_rows = table_head.find_all("tr")
 
     if header_rows:
-        # 사례 1: 'レート' (레이팅) 헤더로 찾기 (가장 높은 우선순위).
+        # 사례 1: 고레이팅 덱 리스트
         rate_header = header_rows[0].find("th", string=lambda t: t and 'レート' in t)
         if rate_header and rate_header.has_attr('colspan'):
             try:
@@ -124,7 +215,7 @@ def calculate_initial_analysis(soup):
             except (ValueError, IndexError):
                 num_samples = 0
 
-        # 사례 2: '連勝数' (연승 수) 헤더로 fallback.
+        # 사례 2: 연승 덱 리스트
         if num_samples == 0:
             streak_header = header_rows[0].find("th", string=lambda t: t and '連勝数' in t)
             if streak_header and streak_header.has_attr('colspan'):
@@ -133,7 +224,7 @@ def calculate_initial_analysis(soup):
                 except (ValueError, IndexError):
                     num_samples = 0
 
-        # 사례 3: 일반 포스트의 경우 '採用枚数' (채용 매수) 헤더로 fallback.
+        # 사례 3: 일반 포스트(그마 달성 등)
         if num_samples == 0:
             generic_header = header_rows[0].find("th", string=lambda t: t and '採用枚数' in t)
             if generic_header and generic_header.has_attr('colspan'):
@@ -210,7 +301,7 @@ def calculate_initial_analysis(soup):
     return cards
 
 def adjust_deck_count(cards):
-    """통계적 패널티를 최소화하여 덱의 총 카드 수를 40장으로 조정합니다."""
+    """통계를 분석하여 덱의 총 카드 수를 40장으로 조정합니다.(Weighted Least Squares, Greedy)"""
     v_avg = np.array([card.weighted_average for card in cards])
     v_std_dev = np.array([card.std_dev for card in cards])
     v_current = np.array([card.rounded_average for card in cards])
@@ -324,11 +415,52 @@ def get_deck_names_for_post():
         return jsonify({"error": "덱 이름을 가져오지 못했습니다."}), 500
     return jsonify(deck_names)
 
+@app.route("/generate_deck_code", methods=['POST'])
+def generate_deck_code():
+    """클라이언트로부터 받은 덱 리스트로 덱 코드를 생성합니다."""
+    data = request.get_json()
+    if not data or 'deck' not in data:
+        return jsonify({"error": "덱 데이터가 필요합니다."}), 400
+
+    card_names_list = data['deck']
+    
+    # 1. 카드 이름별로 매수 카운트
+    from collections import Counter
+    card_counts = Counter(card_names_list)
+
+    hashes = []
+    card_data_for_sorting = [] # (base_card_id, count, encoded_str) 튜플을 저장할 리스트
+
+    # 카드 데이터 수집
+    for name in dict.fromkeys(card_names_list):
+        count = card_counts[name]
+        normalized_name = normalize_card_name(name)
+        base_card_id = card_id_by_normalized_name.get(normalized_name)
+
+        if not base_card_id:
+            return jsonify({"error": f"'{name}' 카드의 ID를 찾을 수 없습니다."}), 404
+
+        base_card_id = int(base_card_id)
+        
+        # 커스텀 맵핑을 사용하여 해시 생성
+        encoded_str = int_to_custom_base64(base_card_id)
+        
+        card_data_for_sorting.append((base_card_id, count, encoded_str))
+    
+    # base_card_id를 기준으로 카드 데이터 정렬
+    card_data_for_sorting.sort(key=lambda x: x[0])
+
+    # 정렬된 순서대로 해시 추가
+    for base_card_id, count, encoded_str in card_data_for_sorting:
+        for _ in range(count):
+            hashes.append(encoded_str)
+        
+    # 최종 덱 코드 생성 (클래스.포맷.해시...)
+    deck_code = "https://shadowverse-wb.com/web/Deck/share?hash=2.2." + ".".join(hashes) + "&lang=ko"
+    
+    return jsonify({"deck_code": deck_code})
+
 
 if __name__ == '__main__':
-    try:
-        app.run(debug=True)
-    finally:
-        if driver:
-            print("Shutting down driver...")
-            driver.quit()
+    load_card_database()
+    app.run(debug=True)

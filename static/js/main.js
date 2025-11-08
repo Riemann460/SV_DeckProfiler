@@ -300,3 +300,47 @@ deckSelect.addEventListener('change', function() {
 
 // --- 초기 로드 ---
 fetchAnalysis(postSelect.value, deckSelect.value);
+
+// 덱 코드 복사 버튼 이벤트 리스너
+document.getElementById('copy-deck-button').addEventListener('click', function() {
+    const deckForApi = [];
+    currentDeckData.forEach(card => {
+        for (let i = 0; i < card.adjusted_count; i++) {
+            deckForApi.push(card.name);
+        }
+    });
+
+    fetch('/generate_deck_code', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ deck: deckForApi }),
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.deck_code) {
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(data.deck_code).then(() => {
+                    const feedback = document.getElementById('copy-feedback');
+                    feedback.textContent = '덱 코드가 클립보드에 복사되었습니다!';
+                    feedback.style.visibility = 'visible';
+                    setTimeout(() => {
+                        feedback.style.visibility = 'hidden';
+                    }, 2000);
+                }).catch(err => {
+                    console.error('클립보드 복사 실패:', err);
+                    alert('클립보드 복사에 실패했습니다.');
+                });
+            } else {
+                alert('클립보드 기능이 지원되지 않는 브라우저입니다.');
+            }
+        } else {
+            alert('덱 코드 생성에 실패했습니다: ' + (data.error || '알 수 없는 오류'));
+        }
+    })
+    .catch(error => {
+        console.error('덱 코드 생성 API 호출 오류:', error);
+        alert('덱 코드 생성 중 서버와 통신하는 데 실패했습니다.');
+    });
+});
